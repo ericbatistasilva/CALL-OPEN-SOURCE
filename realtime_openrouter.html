@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>TechBuddy Call — Manual Frames (Economiza Créditos)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    body { font-family: Inter, system-ui, sans-serif; background:#071026;color:#e6eef8; padding:16px; }
+    .row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;}
+    video, canvas { border-radius:8px; background:#000; max-width:100%; }
+    .panel{background:#0c2030;padding:12px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.5)}
+    input, button, textarea, select { font-size:14px; padding:8px; border-radius:6px; border:1px solid #1b3448; background:#06111a; color:#e6eef8 }
+    button { cursor:pointer }
+    .controls { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap }
+    #log { white-space:pre-wrap; background:#03121a; padding:10px; border-radius:8px; max-height:320px; overflow:auto }
+    small { color:#9fb1c9 }
+  </style>
+</head>
+<body>
+  <h2>TechBuddy Call — Manual Frames (Economiza Créditos)</h2>
+
+  <div class="panel">
+    <label>OpenRouter API Key:</label><br/>
+    <input id="apiKey" placeholder="Cole sua OpenRouter API key aqui" style="width:100%"/>
+    <small>Modelo recomendado com visão: <b>nvidia/nemotron-nano-12b-v2-vl:free</b></small>
+    <div class="controls">
+      <button id="startBtn">▶️ Abrir câmera</button>
+      <button id="stopBtn" disabled>⏹ Fechar câmera</button>
+      <button id="shareScreenBtn">🟦 Compartilhar Tela</button>
+      <button id="snapBtn">📸 Tirar foto (manual)</button>
+      <button id="sendSnapBtn">📤 Enviar foto + texto</button>
+      <button id="sendBtn">✉️ Enviar texto</button>
+      <button id="clearLog">🧹 Limpar log</button>
+    </div>
+  </div>
+
+  <div style="height:12px"></div>
+
+  <div class="row">
+    <div class="panel" style="flex:1 1 420px;min-width:320px;">
+      <h3>Preview</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:12px;color:#9fb1c9">Câmera</div>
+          <video id="camVideo" autoplay playsinline width="320" height="240"></video>
+        </div>
+        <div>
+          <div style="font-size:12px;color:#9fb1c9">Tela (opcional)</div>
+          <video id="screenVideo" autoplay playsinline width="320" height="240"></video>
+        </div>
+      </div>
+
+      <div style="height:8px"></div>
+      <div>
+        <div style="font-size:12px;color:#9fb1c9">Última foto (pronta para enviar)</div>
+        <canvas id="lastCanvas" width="320" height="240" style="display:block;border-radius:6px;background:#021018"></canvas>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:1 1 320px;min-width:320px;">
+      <h3>Áudio / Texto</h3>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button id="voiceBtn">🎤 Usar voz (transcrever)</button>
+        <small id="voiceStatus">Status: parado</small>
+      </div>
+
+      <div style="height:8px"></div>
+      <textarea id="userText" rows="4" placeholder="Ou digite sua pergunta aqui..."></textarea>
+
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="speakManual">🔊 Falar última resposta</button>
+        <label style="display:flex;align-items:center;gap:6px"><input id="ttsCheckbox" type="checkbox" checked/> TTS ativado</label>
+      </div>
+
+      <h4 style="margin-top:12px">Resposta IA</h4>
+      <div id="log">Ainda não houve respostas.</div>
+    </div>
+  </div>
+
+<script>
+/* ---------- CONFIG ---------- */
+const API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const MODEL = "nvidia/nemotron-nano-12b-v2-vl:free";
+
+/* ---------- UI ---------- */
+const apiKeyInput = document.getElementById("apiKey");
+const camVideo = document.getElementById("camVideo");
+const screenVideo = document.getElementById("screenVideo");
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const shareScreenBtn = document.getElementById("shareScreenBtn");
+const snapBtn = document.getElementById("snapBtn");
+const sendSnapBtn = document.getElementById("sendSnapBtn");
+const sendBtn = document.getElementById("sendBtn");
+const logEl = document.getElementById("log");
+const userText = document.getElementById("userText");
+const lastCanvas = document.getElementById("lastCanvas");
+const voiceBtn = document.getElementById("voiceBtn");
+const voiceStatus = document.getElementById("voiceStatus");
+const speakManual = document.getElementById("speakManual");
+const ttsCheckbox = document.getElementById("ttsCheckbox");
+const clearLog = document.getElementById("clearLog");
+
+let camStream = null, screenStream = null;
+let lastFrameDataUrl = null;
+let lastIAResponse = "";
+
+/* ---------- Camera start/stop ---------- */
+startBtn.onclick = async () => {
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
+    camVideo.srcObject = camStream;
+    log("Câmera e microfone ativados. (Manual mode — sem envios automáticos)");
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+  } catch (e) {
+    alert("Erro ao acessar câmera/mic: " + e.message);
+  }
+};
+stopBtn.onclick = () => {
+  if (camStream) camStream.getTracks().forEach(t => t.stop());
+  if (screenStream) screenStream.getTracks().forEach(t => t.stop());
+  camVideo.srcObject = null;
+  screenVideo.srcObject = null;
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  log("Câmera parada.");
+};
+
+shareScreenBtn.onclick = async () => {
+  try {
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video:true });
+    screenVideo.srcObject = screenStream;
+    log("Compartilhamento de tela ativado.");
+  } catch (e) {
+    log("Compartilhar tela cancelado ou não permitido.");
+  }
+};
+
+/* ---------- Capture manual frame ---------- */
+function captureFrame(videoEl, maxW=1000) {
+  if (!videoEl || videoEl.readyState < 2) return null;
+  const w = videoEl.videoWidth, h = videoEl.videoHeight;
+  if (!w || !h) return null;
+  const scale = Math.min(1, maxW / w);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.7);
+}
+
+snapBtn.onclick = () => {
+  const d = captureFrame(camVideo);
+  if (!d) { log("Não foi possível capturar a câmera — aguarde o vídeo iniciar."); return; }
+  lastFrameDataUrl = d;
+  // mostrar no canvas
+  const ctx = lastCanvas.getContext("2d");
+  const img = new Image();
+  img.onload = () => {
+    // dimensiona canvas para imagem mantendo proporção
+    lastCanvas.width = Math.min(640, img.width);
+    lastCanvas.height = Math.round(img.height * (lastCanvas.width / img.width));
+    ctx.drawImage(img, 0, 0, lastCanvas.width, lastCanvas.height);
+  };
+  img.src = d;
+  log("📸 Foto capturada — pronta para enviar manualmente.");
+};
+
+/* ---------- Send manual frame + text ---------- */
+sendSnapBtn.onclick = async () => {
+  if (!lastFrameDataUrl) { log("Nenhuma foto capturada — aperte 'Tirar foto' primeiro."); return; }
+  const text = (userText.value || "").trim() || "Descreva a imagem, por favor.";
+  await sendToOpenRouter(text, lastFrameDataUrl);
+};
+
+/* ---------- Send text only ---------- */
+sendBtn.onclick = async () => {
+  const txt = (userText.value || "").trim();
+  if (!txt) return alert("Digite algo ou capture uma foto.");
+  await sendToOpenRouter(txt, null);
+};
+
+/* ---------- TTS (browser) ---------- */
+speakManual.onclick = () => { if (lastIAResponse) speakText(lastIAResponse); };
+
+function speakText(text) {
+  if (!ttsCheckbox.checked) return;
+  if (!window.speechSynthesis) return log("TTS não suportado no navegador.");
+  const ut = new SpeechSynthesisUtterance(text);
+  ut.lang = "pt-BR";
+  ut.rate = 1;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(ut);
+}
+
+/* ---------- OpenRouter send (manual-friendly) ---------- */
+async function sendToOpenRouter(userMessage, imageDataUrl) {
+  const key = apiKeyInput.value.trim();
+  if (!key) return alert("Cole sua OpenRouter API Key primeiro.");
+
+  // build messages
+  const messages = [{ role: "user", content: userMessage }];
+
+  if (imageDataUrl) {
+    messages.push({
+      role: "user",
+      content: [
+        { type: "text", text: userMessage },
+        { type: "image_url", image_url: { url: imageDataUrl } }
+      ]
+    });
+  }
+
+  const payload = {
+    model: MODEL,
+    messages: messages,
+    max_tokens: 800,
+    temperature: 0.2
+  };
+
+  log("⏳ Enviando requisição (manual) para a IA...");
+  try {
+    const r = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + key,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost",
+        "X-Title": "TechBuddy Manual"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (r.status === 429) {
+      const txt = await r.text();
+      log("⚠️ Rate limit / sem créditos: " + txt);
+      return;
+    }
+
+    if (!r.ok) {
+      const txt = await r.text();
+      log("❌ Erro da API: " + r.status + " → " + txt);
+      return;
+    }
+
+    const data = await r.json();
+    const text = extractTextFromResponse(data);
+    lastIAResponse = text;
+    displayIAResponse(text);
+    speakText(text);
+  } catch (err) {
+    log("❌ Erro de rede: " + err.message);
+  }
+}
+
+/* ---------- Extract text helper ---------- */
+function extractTextFromResponse(data) {
+  try {
+    const ch = data.choices && data.choices[0];
+    if (!ch) return JSON.stringify(data);
+    const msg = ch.message || ch;
+    const content = msg.content || msg;
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      for (const c of content) {
+        if (typeof c === "string") return c;
+        if (c?.type === "text" && c?.text) return c.text;
+      }
+      return JSON.stringify(content);
+    } else if (content?.type === "text" && content?.text) {
+      return content.text;
+    }
+    return JSON.stringify(content);
+  } catch (e) {
+    return "Erro lendo resposta da IA";
+  }
+}
+
+function displayIAResponse(text) {
+  const t = new Date().toLocaleTimeString();
+  log("[" + t + "] 🤖 IA: " + text);
+}
+
+/* ---------- Simple logger ---------- */
+function log(msg) {
+  const now = new Date().toLocaleTimeString();
+  logEl.textContent = now + " — " + msg + "\n\n" + logEl.textContent;
+}
+
+/* ---------- Voice recognition (optional) ---------- */
+let recognition = null, listening = false;
+voiceBtn.onclick = () => {
+  if (!('webkitSpeechRecognition' in window)) { alert("Reconhecimento de voz não suportado neste navegador. Use Chrome/Edge ou digite a mensagem."); return; }
+  if (!recognition) {
+    recognition = new webkitSpeechRecognition();
+    recognition.lang = "pt-BR";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    recognition.onstart = () => { listening = true; voiceStatus.textContent = "Status: ouvindo..."; };
+    recognition.onend = () => { listening = false; voiceStatus.textContent = "Status: parado"; };
+    recognition.onerror = (e) => { listening = false; voiceStatus.textContent = "Erro: " + e.error; };
+    recognition.onresult = (ev) => {
+      const text = ev.results[0][0].transcript;
+      userText.value = text;
+      log("🎤 Transcrito: " + text);
+    };
+  }
+  if (!listening) recognition.start(); else recognition.stop();
+};
+
+/* ---------- Clear log ---------- */
+clearLog.onclick = () => { logEl.textContent = ""; };
+
+/* ---------- clean up on close ---------- */
+window.addEventListener("beforeunload", () => {
+  if (camStream) camStream.getTracks().forEach(t => t.stop());
+  if (screenStream) screenStream.getTracks().forEach(t => t.stop());
+});
+</script>
+</body>
+</html>
