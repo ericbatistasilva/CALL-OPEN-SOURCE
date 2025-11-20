@@ -1,6 +1,6 @@
 # Call — Manual Frames (Open-Source)
 
-TechBuddy Nano is an AI that allows you to send text and images to OpenRouter, with camera capture, screen sharing, and TTS (Text-to-Speech).
+Call is an AI that allows you to send text and images to OpenRouter, with camera capture, screen sharing, and TTS (Text-to-Speech).
 
 Perfect for testing AI manually and in a fun way!
 
@@ -18,7 +18,7 @@ Perfect for testing AI manually and in a fun way!
 
 3. Paste your OpenRouter API Key in the indicated field.
 
-4. Test TechBuddy Nano using text, photos, or voice!
+4. Test Call using text, photos, or voice!
 
 ## Contributing
 Feel free to improve the interface, add features, or create new features.
